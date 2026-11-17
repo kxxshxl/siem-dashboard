@@ -1,0 +1,188 @@
+# Built-in detection rules. Seeded into the database on first start; analysts can
+# toggle them or add their own from the Rules page / API.
+#
+# Each rule maps to a MITRE ATT&CK tactic + technique so alerts can be pivoted by
+# adversary behaviour rather than raw log source.
+
+- slug: ssh-brute-force
+  name: Repeated authentication failures from one source
+  description: Six or more failed logins from the same IP within two minutes.
+  kind: threshold
+  severity: high
+  mitre_tactic: Credential Access
+  mitre_technique: T1110.001
+  definition:
+    where: {category: authentication, action: login_failure}
+    group_by: [src_ip]
+    count: 6
+    window_seconds: 120
+    summary: "{count} failed logins from {src_ip} against {host} in {seconds}s"
+
+- slug: brute-force-success
+  name: Successful login after brute force
+  description: A burst of failed logins followed by a success from the same IP - likely compromised credentials.
+  kind: sequence
+  severity: critical
+  mitre_tactic: Credential Access
+  mitre_technique: T1110
+  definition:
+    group_by: [src_ip]
+    window_seconds: 600
+    steps:
+      - name: failures
+        where: {category: authentication, action: login_failure}
+        count: 5
+      - name: success
+        where: {category: authentication, action: login_success}
+    summary: "{src_ip} logged in as {username} on {host} after repeated failures"
+
+- slug: password-spray
+  name: Password spraying across many accounts
+  description: One source failing logins against eight or more distinct usernames in five minutes.
+  kind: cardinality
+  severity: high
+  mitre_tactic: Credential Access
+  mitre_technique: T1110.003
+  definition:
+    where: {category: authentication, action: login_failure}
+    group_by: [src_ip]
+    field: username
+    distinct: 8
+    window_seconds: 300
+    summary: "{src_ip} tried {count} different accounts in {seconds}s"
+
+- slug: privileged-login-external
+  name: Privileged account login from external address
+  description: root / administrator authenticated from an IP outside internal ranges.
+  kind: match
+  severity: high
+  mitre_tactic: Initial Access
+  mitre_technique: T1078
+  definition:
+    where:
+      action: login_success
+      username: [root, administrator, admin]
+      src_ip: {not_cidr: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8]}
+    group_by: [src_ip, username]
+    summary: "{username} logged in to {host} from external IP {src_ip}"
+
+- slug: port-scan
+  name: Port scan detected
+  description: A source probed fifteen or more distinct ports on one host within a minute.
+  kind: cardinality
+  severity: medium
+  mitre_tactic: Discovery
+  mitre_technique: T1046
+  definition:
+    where: {category: network}
+    group_by: [src_ip, dst_ip]
+    field: dst_port
+    distinct: 15
+    window_seconds: 60
+    summary: "{src_ip} scanned {count} ports on {dst_ip} in {seconds}s"
+
+- slug: web-404-flood
+  name: Web content discovery (404 flood)
+  description: Thirty or more 404 responses to one client within a minute - directory brute forcing.
+  kind: threshold
+  severity: medium
+  mitre_tactic: Reconnaissance
+  mitre_technique: T1595.003
+  definition:
+    where: {category: web, http.status: 404}
+    group_by: [src_ip]
+    count: 30
+    window_seconds: 60
+    summary: "{src_ip} generated {count} 404s on {host} in {seconds}s"
+
+- slug: web-sqli
+  name: SQL injection attempt
+  description: Request URI contains common SQL injection payloads.
+  kind: match
+  severity: high
+  mitre_tactic: Initial Access
+  mitre_technique: T1190
+  definition:
+    where:
+      category: web
+      http.uri: {regex: "(union(\\s|%20|\\+)+select|'\\s*or\\s*'?1'?\\s*=\\s*'?1|sleep\\(\\d+\\)|information_schema)"}
+    group_by: [src_ip]
+    summary: "SQL injection payload from {src_ip} against {host}"
+
+- slug: encoded-powershell
+  name: Encoded PowerShell command
+  description: PowerShell launched with an encoded command line, a common obfuscation technique.
+  kind: match
+  severity: high
+  mitre_tactic: Execution
+  mitre_technique: T1059.001
+  definition:
+    where:
+      category: process
+      process.cmdline: {regex: "powershell(\\.exe)?\\s.*\\s-(e|en|enc|encodedcommand)\\s"}
+    group_by: [host]
+    summary: "Encoded PowerShell executed by {username} on {host}"
+
+- slug: lateral-service-install
+  name: Remote service creation on multiple hosts
+  description: One account created remote services on three or more hosts within 15 minutes (PsExec-style movement).
+  kind: cardinality
+  severity: high
+  mitre_tactic: Lateral Movement
+  mitre_technique: T1021.002
+  definition:
+    where: {category: process, action: service_created, service.remote: true}
+    group_by: [username]
+    field: host
+    distinct: 3
+    window_seconds: 900
+    summary: "{username} created remote services on {count} hosts"
+
+- slug: shadow-copy-deletion
+  name: Volume shadow copy deletion
+  description: Backup / shadow copy destruction, typically a precursor to ransomware encryption.
+  kind: match
+  severity: critical
+  mitre_tactic: Impact
+  mitre_technique: T1490
+  definition:
+    where:
+      category: process
+      any:
+        - {process.cmdline: {contains: "vssadmin delete shadows"}}
+        - {process.cmdline: {contains: "wmic shadowcopy delete"}}
+        - {process.cmdline: {contains: "wbadmin delete catalog"}}
+    group_by: [host]
+    summary: "Shadow copies deleted on {host} by {username}"
+
+- slug: mass-file-encryption
+  name: Mass file encryption
+  description: Twenty or more files renamed to a ransomware extension on one host within a minute.
+  kind: threshold
+  severity: critical
+  mitre_tactic: Impact
+  mitre_technique: T1486
+  definition:
+    where:
+      category: file
+      action: file_renamed
+      file.path: {regex: "\\.(locked|enc|crypt|encrypted)$"}
+    group_by: [host]
+    count: 20
+    window_seconds: 60
+    summary: "{count} files encrypted on {host} in {seconds}s"
+
+- slug: large-outbound-transfer
+  name: Large outbound transfer to external host
+  description: A single connection sent more than 50 MB to an address outside internal ranges.
+  kind: match
+  severity: high
+  mitre_tactic: Exfiltration
+  mitre_technique: T1048
+  definition:
+    where:
+      category: network
+      bytes_out: {gte: 50000000}
+      dst_ip: {not_cidr: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8]}
+    group_by: [src_ip, dst_ip]
+    summary: "{src_ip} sent {bytes_out:,} bytes to {dst_ip}"
