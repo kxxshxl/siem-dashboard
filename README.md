@@ -135,10 +135,3 @@ Create it from the **Detection rules** page (kind `cardinality`), hit *Backtest*
 - Events are stored in a relational database; at real SIEM volumes they would belong in a columnar or search store (ClickHouse, OpenSearch).
 - Planned: Sigma rule import, retention policies, GeoIP / threat-intel enrichment, notification webhooks (Slack, email).
 
-## Acknowledgements
-
-The idea for this project came from the project list in [CarterPerez-dev/Cybersecurity-Projects](https://github.com/CarterPerez-dev/Cybersecurity-Projects). Vigil is an independent implementation with its own design and code.
-
-## License
-
-[MIT](LICENSE)
